@@ -1,0 +1,27 @@
+{
+  "name": "paseo-factory-mcp-compat",
+  "version": "0.1.0",
+  "description": "Magpie middleware for Paseo MCP tool names on Factory",
+  "type": "module",
+  "engines": {
+    "node": "^22.13.0 || >=24"
+  },
+  "files": [
+    "paseo-factory-mcp.middleware.js"
+  ],
+  "magpie": {
+    "middleware": "./paseo-factory-mcp.middleware.js"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc",
+    "test": "node --test",
+    "verify": "npm run lint && npm run typecheck && npm test",
+    "build": "npm pack --dry-run"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.0",
+    "eslint": "^10.0.0",
+    "typescript": "^5.9.0"
+  }
+}
