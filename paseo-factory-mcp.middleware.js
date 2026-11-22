@@ -1,5 +1,7 @@
 /** @typedef {Record<string, unknown>} JsonObject */
 /** @typedef {{original: string, alias: string}} ToolName */
+/** @typedef {{original: string, namespace: string, tool: string}} McpTool */
+/** @typedef {{holder: JsonObject, key: "tool_name" | "name" | "tool"}} ToolNameField */
 /**
  * @typedef {object} Context
  * @property {string} agent
@@ -10,11 +12,10 @@
  * @property {{toolNames?: ToolName[]}} state
  */
 
-/** @type {ToolName[]} */
-const toolNames = [
-  { original: "mcp__paseo__progress_show", alias: "paseo_progress_show" },
-  { original: "mcp__paseo__progress_ticket_update", alias: "paseo_progress_ticket_update" },
-]
+const MAX_ALIAS_LENGTH = 64
+const MCP_PREFIX = "mcp__"
+const NAME_PART_PATTERN = /^[A-Za-z0-9_-]+$/
+const ALIAS_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
 
 export const events = ["content_block_start"]
 
@@ -28,6 +29,126 @@ function objects(value) {
   return Array.isArray(value) ? value.filter(isObject) : []
 }
 
+/** @param {JsonObject} holder @returns {ToolNameField | undefined} */
+function nameField(holder) {
+  if (typeof holder.tool_name === "string") return { holder, key: "tool_name" }
+  if (typeof holder.name === "string") return { holder, key: "name" }
+}
+
+/**
+ * Collects declarations and references from the structured deferred-tool
+ * blocks Claude Code sends, including the nested reference form.
+ * @param {JsonObject} block
+ * @param {JsonObject[]} declarations
+ * @param {ToolNameField[]} references
+ */
+function collectDeferredBlock(block, declarations, references) {
+  switch (block.type) {
+    case "tool_addition": {
+      const tool = block.tool
+      if (isObject(tool) && tool.type === "tool_definition") {
+        if (isObject(tool.definition)) declarations.push(tool.definition)
+        else if (typeof tool.name === "string") declarations.push(tool)
+      } else if (isObject(tool) && tool.type === "tool_reference") {
+        const field = nameField(tool)
+        if (field) references.push(field)
+      } else if (typeof tool === "string") {
+        references.push({ holder: block, key: "tool" })
+      }
+      break
+    }
+    case "tool_definition":
+      if (isObject(block.definition)) declarations.push(block.definition)
+      else if (typeof block.name === "string") declarations.push(block)
+      break
+    case "tool_reference":
+    case "tool_removal": {
+      const field = nameField(block)
+      if (field) references.push(field)
+      if (isObject(block.tool) && block.tool.type === "tool_reference") {
+        const nested = nameField(block.tool)
+        if (nested) references.push(nested)
+      } else if (typeof block.tool === "string") {
+        references.push({ holder: block, key: "tool" })
+      }
+      break
+    }
+  }
+}
+
+/**
+ * Splits an MCP tool name into its namespace and tool. It scans for the first
+ * double underscore that leaves a non-empty namespace and tool, so tool names
+ * (and leading underscores in a namespace) may contain further underscores.
+ * @param {unknown} name
+ * @returns {{namespace: string, tool: string} | undefined}
+ */
+function parseMcpToolName(name) {
+  if (typeof name !== "string" || !name.startsWith(MCP_PREFIX)) return
+  const rest = name.slice(MCP_PREFIX.length)
+  for (let separator = rest.indexOf("__"); separator !== -1; separator = rest.indexOf("__", separator + 1)) {
+    if (separator === 0) continue
+    const namespace = rest.slice(0, separator)
+    const tool = rest.slice(separator + 2)
+    if (NAME_PART_PATTERN.test(namespace) && NAME_PART_PATTERN.test(tool)) return { namespace, tool }
+  }
+}
+
+/** @param {string} value @param {number} seed @returns {string} */
+function hash32(value, seed) {
+  let hash = seed >>> 0
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index)
+    hash = Math.imul(hash, 0x01000193) >>> 0
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0")
+}
+
+/**
+ * Produces a stable 64-bit-sized digest without relying on BigInt or crypto,
+ * so the alias is identical in every runtime Magpie loads the middleware in.
+ * @param {string} value
+ * @param {number} attempt
+ * @returns {string}
+ */
+function aliasDigest(value, attempt) {
+  const input = `${value}\u0000${attempt}`
+  return `${hash32(input, 0x811c9dc5)}${hash32(input, 0x9e3779b9)}`
+}
+
+/** @param {string} namespace @param {string} tool @returns {string} */
+function aliasBase(namespace, tool) {
+  const base = `${namespace}_${tool}`
+  // Avoid the reserved MCP prefix even when the namespace ends with underscores.
+  return base.replace(/^mcp_{2,}/, "mcp_")
+}
+
+/** @param {string} alias @param {Set<string>} reserved @returns {boolean} */
+function isUsableAlias(alias, reserved) {
+  return ALIAS_PATTERN.test(alias) && !alias.startsWith(MCP_PREFIX) && !reserved.has(alias)
+}
+
+/**
+ * Returns the preferred alias when it is free, otherwise a deterministic
+ * prefix plus digest. Long aliases keep a readable prefix without truncating
+ * two different names to the same value.
+ * @param {string} original
+ * @param {string} namespace
+ * @param {string} tool
+ * @param {Set<string>} reserved
+ * @returns {string}
+ */
+function createAlias(original, namespace, tool, reserved) {
+  const base = aliasBase(namespace, tool)
+  if (isUsableAlias(base, reserved)) return base
+  for (let attempt = 0; ; attempt += 1) {
+    const suffix = aliasDigest(original, attempt)
+    const prefixLength = Math.max(0, MAX_ALIAS_LENGTH - suffix.length - 1)
+    const candidate = `${base.slice(0, prefixLength)}_${suffix}`
+    if (isUsableAlias(candidate, reserved)) return candidate
+  }
+}
+
 /** @param {unknown} body @param {Context} ctx */
 export function onProvider(body, ctx) {
   // The runtime shares state across candidate attempts, but parses a fresh body.
@@ -38,57 +159,73 @@ export function onProvider(body, ctx) {
   const declarations = objects(body.tools)
   /** @type {JsonObject[]} */
   const uses = []
-  /** @type {JsonObject[]} */
+  /** @type {ToolNameField[]} */
   const references = []
   for (const message of objects(body.messages)) {
     for (const block of objects(message.content)) {
-      switch (block.type) {
-        case "tool_use":
-          if (message.role === "assistant") uses.push(block)
-          break
-        case "tool_addition": {
-          const tool = block.tool
-          if (isObject(tool) && tool.type === "tool_definition" && isObject(tool.definition)) {
-            declarations.push(tool.definition)
-          }
-          break
-        }
-        case "tool_reference":
-        case "tool_removal":
-          references.push(block)
-          break
-        case "tool_result":
-          for (const part of objects(block.content)) {
-            if (part.type === "tool_definition" && isObject(part.definition)) {
-              declarations.push(part.definition)
-            } else if (part.type === "tool_reference") {
-              references.push(part)
-            }
-          }
-          break
+      if (block.type === "tool_use") {
+        if (message.role === "assistant") uses.push(block)
+        continue
       }
+      collectDeferredBlock(block, declarations, references)
+      if (block.type !== "tool_result") continue
+      const parts = Array.isArray(block.content) ? objects(block.content) : isObject(block.content) ? [block.content] : []
+      for (const part of parts) collectDeferredBlock(part, declarations, references)
     }
   }
 
-  const declaredNames = new Set(declarations.map(tool => tool.name))
-  const historicalNames = new Set(uses.map(tool => tool.name))
-  const active = toolNames.filter(({ original, alias }) =>
-    declaredNames.has(original) && !declaredNames.has(alias) && !historicalNames.has(alias))
-  if (active.length === 0) return
+  /** @type {Set<string>} */
+  const declaredNames = new Set()
+  /** @type {McpTool[]} */
+  const targets = []
+  for (const declaration of declarations) {
+    const name = declaration.name
+    if (typeof name !== "string" || declaredNames.has(name)) continue
+    declaredNames.add(name)
+    const parsed = parseMcpToolName(name)
+    if (parsed) targets.push({ original: name, ...parsed })
+  }
+  if (targets.length === 0) return
 
-  const choice = body.tool_choice
-  if (isObject(choice) && choice.type === "tool") uses.push(choice)
+  const choice = isObject(body.tool_choice) ? body.tool_choice : undefined
+  /** @type {Set<string>} */
+  const reserved = new Set(declaredNames)
+  for (const use of uses) {
+    if (typeof use.name === "string") reserved.add(use.name)
+  }
+  for (const reference of references) {
+    const name = reference.holder[reference.key]
+    if (typeof name === "string") reserved.add(name)
+  }
+  if (choice && typeof choice.name === "string") reserved.add(choice.name)
+
+  // Sorting by the original name makes aliases independent of declaration order.
+  targets.sort((left, right) => (
+    left.original < right.original ? -1 : left.original > right.original ? 1 : 0
+  ))
+
+  /** @type {ToolName[]} */
+  const active = []
+  const aliases = new Map()
+  for (const target of targets) {
+    const alias = createAlias(target.original, target.namespace, target.tool, reserved)
+    active.push({ original: target.original, alias })
+    aliases.set(target.original, alias)
+    reserved.add(alias)
+  }
+
+  if (choice && choice.type === "tool") uses.push(choice)
 
   // Only these structured fields carry tool names. Inputs and text may contain
   // identical strings with unrelated meanings.
-  const aliases = new Map(active.map(({ original, alias }) => [original, alias]))
   for (const tool of declarations.concat(uses)) {
     const alias = typeof tool.name === "string" && aliases.get(tool.name)
     if (alias) tool.name = alias
   }
   for (const reference of references) {
-    const alias = typeof reference.tool_name === "string" && aliases.get(reference.tool_name)
-    if (alias) reference.tool_name = alias
+    const name = reference.holder[reference.key]
+    const alias = typeof name === "string" && aliases.get(name)
+    if (alias) reference.holder[reference.key] = alias
   }
 
   ctx.state.toolNames = active
