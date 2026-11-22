@@ -56,6 +56,16 @@ magpie plugin list
 - 上游 Bun 样例与实际 Gateway 的上下文有差异。只在 Bun 中执行 Hook 无法核实 moejs 加载成功、实际路由回退或 SSE 帧的端到端传递。[架构](architecture.md)
 - `.portable` 只隔离 Magpie 自身数据。测试网关启动时仍可能检测本机客户端，并刷新现有 DSH 路由。使用独立的 `DSH_HOME`，或在独立账号或容器中启动测试网关。
 
+## 通用名称适配验证
+
+在 Magpie 0.1.4656 与隔离的 Claude Code 2.1.330 配置下，用模拟 Factory 和另一 Provider 验证终端协议。两者均在本机运行，未加载真实凭证或存档。
+
+- 仓库回归用例覆盖全部 53 个 Paseo MCP 名称，以及冲突、长名、重复、延迟声明和路由状态。另从当前工具清单生成 147 个只含名称的测试声明，包含 94 个 Codex Apps 名称。逐项和合并验证请求改名及 SSE、JSON 回复恢复，倒序声明得到相同映射。
+- 隔离 Magpie 将合并的 147 个声明作为唯一别名交给模拟 Factory，客户端收到原名。分别确认了 JSON、SSE、显式选择、非 Factory 直连、两个方向的回退和 SSE 错误透传。
+- Claude Code 实际执行了本地 stdio MCP 只读工具 `status_read`。第二轮模拟 Factory 收到同一工具调用 ID、改名后的历史调用以及测试返回值，并正常结束。
+
+真实 Factory 闭环属于[部署验收](#真实调用验收)。
+
 ## 本次验证范围
 
 用 Magpie v0.1.4656 Linux CLI 运行隔离网关和两种回环模拟 Provider，实际加载本插件的三个 Hook。验证两个工具分别与同时声明、SSE 和 JSON 名称恢复、第二轮 ID 对应与结束事件、非 Factory 直连及从模拟 Factory 回退、HTTP 200 带 SSE 错误事件的透传。另以固定社区 Factory 插件版本和模拟网络验证已有别名逻辑的组合，包括延迟定义和插件自带的批量别名回复恢复。

@@ -1008,6 +1008,19 @@ test("different originals whose simple aliases collide stay unique and order-ind
   assert.equal(mappedAlias(reversedCtx, second), secondAlias)
 })
 
+test("a collision with a normalized MCP prefix can allocate and restore an alias", () => {
+  const ctx = context()
+  const original = "mcp__mcp____"
+  const occupied = "mcp_"
+  const out = tryProvider({ tools: [toolBlock(original), toolBlock(occupied)] }, ctx)
+  const alias = out.tools[0].name
+
+  assertAliasContract(alias, original)
+  assert.notEqual(alias, occupied)
+  assert.equal(out.tools[1].name, occupied)
+  assert.equal(restoreFromEvent(ctx, alias), original)
+})
+
 test("aliases avoid names reserved by declarations, history, choices and references", () => {
   const target = "mcp__acme__deploy"
   const base = "acme_deploy"

@@ -86,12 +86,10 @@ function collectDeferredBlock(block, declarations, references) {
 function parseMcpToolName(name) {
   if (typeof name !== "string" || !name.startsWith(MCP_PREFIX)) return
   const rest = name.slice(MCP_PREFIX.length)
-  for (let separator = rest.indexOf("__"); separator !== -1; separator = rest.indexOf("__", separator + 1)) {
-    if (separator === 0) continue
-    const namespace = rest.slice(0, separator)
-    const tool = rest.slice(separator + 2)
-    if (NAME_PART_PATTERN.test(namespace) && NAME_PART_PATTERN.test(tool)) return { namespace, tool }
-  }
+  if (!NAME_PART_PATTERN.test(rest)) return
+  const separator = rest.indexOf("__", 1)
+  if (separator === -1 || separator + 2 >= rest.length) return
+  return { namespace: rest.slice(0, separator), tool: rest.slice(separator + 2) }
 }
 
 /** @param {string} value @param {number} seed @returns {string} */
@@ -144,7 +142,7 @@ function createAlias(original, namespace, tool, reserved) {
   for (let attempt = 0; ; attempt += 1) {
     const suffix = aliasDigest(original, attempt)
     const prefixLength = Math.max(0, MAX_ALIAS_LENGTH - suffix.length - 1)
-    const candidate = `${base.slice(0, prefixLength)}_${suffix}`
+    const candidate = aliasBase(base.slice(0, prefixLength), suffix)
     if (isUsableAlias(candidate, reserved)) return candidate
   }
 }

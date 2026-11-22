@@ -1,6 +1,6 @@
 # Magpie Factory MCP 兼容性
 
-独立的 Magpie Gateway Middleware，为经 Factory Provider 使用 Anthropic Messages 的 Claude Code 适配两个 Paseo MCP 工具名。
+独立的 Magpie Gateway Middleware，为经 Factory Provider 使用 Anthropic Messages 的 Claude Code 适配 `mcp__<命名空间>__<工具名>` 格式的 MCP 工具名。
 
 开发需要 Node.js 22.13+（22.x）或 24+，以及 npm。运行需要 Magpie 和已配置的 Factory Provider。
 

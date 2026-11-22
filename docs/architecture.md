@@ -4,7 +4,9 @@
 
 [包清单](../package.json)将 [单文件中间件](../paseo-factory-mcp.middleware.js)交给 Magpie。插件无运行依赖。范围由 `ctx.agent === "claude"`、`ctx.protocol === "anthropic"`、`/v1/messages` 和 Provider 元组 `{ id: "factory", account: "plugin" }` 共同确定。自定义转发端点即便显示名相同，也不会触发。[Provider 标识来源](https://github.com/yetone/magpie/blob/f0b58041df3c5031b42c788429288cf95b6c4e11/internal/provider/plugins.go#L588-L655)
 
-`onProvider` 为每次候选清除旧映射，再从本次实际声明中决定使用哪两个名称。顶层声明和 Factory 会提升成声明的结构化延迟定义均计入。显式选择、历史 `tool_use` 和结构化引用随有效声明同步，只有历史引用时保持原样。已有声明或历史工具调用占用目标别名时停用该项映射。请求不改变调用 ID、工具参数、Thinking 或签名。
+`onProvider` 为每次候选清除旧映射，再收集本次顶层声明和结构化延迟定义。匹配 `mcp__<命名空间>__<工具名>` 的名称从前缀后第一个能划分出两个有效部分的双下划线分隔。两个部分都须非空并由 ASCII 字母、数字、下划线或连字符组成。别名优先采用命名空间和工具名拼成的可读名称。长名或冲突使用确定性备用别名，插件生成的别名上限为 64 个字符。分配顺序由原名决定，重复声明共享别名。
+
+分配前预留本次声明、显式选择、历史 `tool_use` 和结构化引用中的名称。显式选择、历史调用和结构化引用随有效声明同步，只有历史引用时保持原样。请求不改变调用 ID、工具参数、Thinking 或签名。
 
 `onEvent` 处理客户端 SSE 的工具调用起始帧，`onResponse` 处理成功的非流式 Messages 回包。两者依据请求级映射恢复该次转换过的工具名。错误响应、流内错误、其他工具、结果 ID 和工具入参保持原状。插件不发起请求，不接管 Factory 插件的重试。
 
