@@ -73,3 +73,17 @@ magpie plugin list
 Claude Code 2.1.330 实际通过隔离网关执行两个本地 stdio MCP 模拟工具，模拟模型收到返回结果并继续对话。这个测试预先加载工具，覆盖执行与回传。动态工具定义另以构造样例验证。
 
 当前远端的只读模型列表可见目标 Factory 模型。该入口无法安装中间件，当前环境的 Claude Code 也没有已配置的 Paseo MCP。上述验证使用模拟上游及结果，完整在线验收仍需可管理的 Factory 实例和接入 Paseo 的 Claude Code。[真实调用验收](#真实调用验收)
+
+### 2026-11-22 Factory 工具声明对照
+
+通过 Claude Code 当前配置的 Magpie 网关向 `factory/claude-opus-5-5` 发起新会话。使用相同的短提示、测试工具描述和空对象 schema。逐一声明存档中的 11 个 Paseo Progress 工具，并测试组合。请求未携带原会话，模型未调用测试工具。
+
+| 声明 | 结果 |
+|---|---|
+| 无工具或 `neutral_status` | HTTP 200，收到 `message_stop` |
+| `progress_show`、`progress_ticket_update` 分别或同时声明 | HTTP 200，收到 `message_stop` |
+| 其余 9 个分别声明、合并声明，以及全部 11 个合并声明 | HTTP 400，`content_policy_rejected` |
+| `mcp__paseo__neutral_status`、`mcp__test__neutral_status`、`mcp__test__progress_start` 分别声明 | HTTP 400，`content_policy_rejected` |
+| `paseo_progress_start` | HTTP 200，收到 `message_stop` |
+
+同一存档的本地 Hook 对照表明，当前中间件只转换已配置的两个名称。在线测试只观察入口名称与响应，未采集 Factory Provider 最终发送的请求体。对照将本次复现定位到所测工具名格式，实际工具执行及多轮回传仍按[真实调用验收](#真实调用验收)验证。
